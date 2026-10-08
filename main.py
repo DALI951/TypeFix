@@ -1,5 +1,6 @@
 import threading
 import time
+import queue
 import pythoncom
 
 from core.buffer import Buffer
@@ -25,9 +26,11 @@ class App:
         self.winutil = WinUtil()
         self.running = True
         self._last_check = 0
-        self._ignore_until = 0
+        self._q = queue.Queue()
+        self._skip = {}
+        self._skip_until = 0
         self._check_throttle = 0.07
-        self.hook = KeyHook(self.on_key)
+        self.hook = KeyHook(lambda n, d: self._q.put((n, d)))
         self.tray = TrayApp(
             on_toggle=self.toggle_enabled,
             on_settings=self.open_settings,
@@ -63,8 +66,11 @@ class App:
             pass
 
     def on_key(self, key_name: str, is_down: bool):
-        if time.time() < self._ignore_until:
-            return
+        if is_down and time.time() < self._skip_until:
+            _n = (key_name or '').lower()
+            if self._skip.get(_n, 0) > 0:
+                self._skip[_n] -= 1
+                return
         if not is_down:
             return
         if not self.cfg.data.get('enabled', True):
@@ -91,6 +97,8 @@ class App:
         self.overlay.hide()
 
     def _update_overlay(self):
+        if not self._q.empty():
+            return
         now = time.time()
         if now - self._last_check < self._check_throttle:
             return
@@ -134,10 +142,13 @@ class App:
             sugg = self.corrector.suggest(word, 1)
             if sugg and sugg.lower() != word.lower():
                 try:
-                    self.injector.replace_word(len(word) + 1, sugg + ' ')
+                    _x = self._pending_extra()
+                    if _x is not None and self.injector.replace_word(len(word), sugg, 1 + _x) is True:
+                        for _k2, _v2 in (('left', 1 + _x), ('backspace', len(word)), ('right', 1 + _x)):
+                            self._skip[_k2] = self._skip.get(_k2, 0) + _v2
+                        self._skip_until = time.time() + 1.0
                 except Exception:
                     pass
-                self._ignore_until = time.time() + 0.15
                 self.guard.mark_protected(hwnd, caret[0], caret[1], word, sugg)
                 self.cfg.data.setdefault('learned', {})[word.lower()] = sugg
                 self.cfg.save()
@@ -146,7 +157,44 @@ class App:
                 return
         self.overlay.hide()
 
+    def _pending_extra(self):
+        n = 0
+        sk = dict(self._skip) if time.time() < self._skip_until else {}
+        with self._q.mutex:
+            items = list(self._q.queue)
+        for name, down in items:
+            if not down:
+                continue
+            k = (name or '').lower()
+            if sk.get(k, 0) > 0:
+                sk[k] -= 1
+                continue
+            if k in ('shift', 'right shift', 'caps lock'):
+                continue
+            if k == 'space' or (len(k) == 1 and k.isprintable()):
+                n += 1
+            elif k == 'backspace':
+                n -= 1
+                if n < 0:
+                    return None
+            else:
+                return None
+        return n
+
+    def _worker(self):
+        while self.running:
+            try:
+                n, d = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self.on_key(n, d)
+            except Exception:
+                import traceback, os
+                open(os.path.expanduser('~/typefix_err.log'), 'a').write(traceback.format_exc())
+
     def run(self):
+        threading.Thread(target=self._worker, daemon=True).start()
         try:
             self.hook.start()
         except Exception:
