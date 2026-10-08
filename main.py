@@ -25,6 +25,7 @@ class App:
         self.winutil = WinUtil()
         self.running = True
         self._last_check = 0
+        self._ignore_until = 0
         self._check_throttle = 0.07
         self.hook = KeyHook(self.on_key)
         self.tray = TrayApp(
@@ -62,6 +63,8 @@ class App:
             pass
 
     def on_key(self, key_name: str, is_down: bool):
+        if time.time() < self._ignore_until:
+            return
         if not is_down:
             return
         if not self.cfg.data.get('enabled', True):
@@ -100,6 +103,7 @@ class App:
             self.overlay.hide()
             return
         caret = self.winutil.get_caret_rect()
+        open(__import__('os').path.expanduser('~/typefix_keys.log'), 'a').write(f'caret={caret}\n')
         if not caret:
             return
         hwnd = self.winutil.get_foreground_hwnd()
@@ -130,9 +134,10 @@ class App:
             sugg = self.corrector.suggest(word, 1)
             if sugg and sugg.lower() != word.lower():
                 try:
-                    self.injector.replace_word(len(word), sugg)
+                    self.injector.replace_word(len(word) + 1, sugg + ' ')
                 except Exception:
                     pass
+                self._ignore_until = time.time() + 0.15
                 self.guard.mark_protected(hwnd, caret[0], caret[1], word, sugg)
                 self.cfg.data.setdefault('learned', {})[word.lower()] = sugg
                 self.cfg.save()

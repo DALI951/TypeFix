@@ -17,7 +17,7 @@ class KeyHook:
             is_down = event.event_type == keyboard.KEY_DOWN
             self.callback(name, is_down)
         except Exception:
-            pass
+            import traceback, os; open(os.path.expanduser('~/typefix_err.log'), 'a').write(traceback.format_exc())
 
     def start(self):
         if self._running or keyboard is None:

@@ -38,8 +38,8 @@ class Corrector:
         if self.should_ignore(word):
             return False
         wl = word.lower()
-        suggestions = self.sym.lookup(wl, Verbosity.CLOSEST, max_edit_distance=2)
-        if suggestions:
+        suggestions = self.sym.lookup(wl, Verbosity.TOP, max_edit_distance=2)
+        if suggestions and suggestions[0].distance == 0:
             return False
         return True
 
